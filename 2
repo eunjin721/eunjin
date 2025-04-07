@@ -1,0 +1,110 @@
+# 📌 에너지 시뮬레이션 통합 버전
+
+# 1️⃣ 기본 설정
+hours = [0, 3, 6, 9, 12, 15, 18, 21]
+base_demand = [50, 48, 55, 70, 90, 88, 75, 60]
+LCOE_solar, LCOE_wind, LCOE_nuclear, LCOE_storage = 40, 35, 50, 10
+nuclear_output = 35  # 원자력 고정
+storage_capacity = 50
+storage = 0
+
+# 2️⃣ 시나리오 정의
+def get_scenario_data(name):
+    if name == "맑은 날":
+        return [25]*8, [0 if h < 6 or h > 18 else 800 for h in hours], [4]*8, [20]*8, ["맑음"]*8, base_demand
+    elif name == "폭풍우":
+        return [20]*8, [0]*8, [12]*8, [80]*8, ["비"]*8, base_demand
+    elif name == "에너지 공급 취약":
+        return [32]*8, [100]*8, [3.2]*8, [120]*8, ["흐림"]*8, [int(d*1.4) for d in base_demand]
+    elif name == "흐린 날":
+        return [18]*8, [0 if h < 6 or h > 18 else 300 for h in hours], [4]*8, [50]*8, ["흐림"]*8, base_demand
+    elif name == "눈 내리는 날":
+        return [-2]*8, [0 if h < 6 or h > 18 else 100 for h in hours], [7]*8, [30]*8, ["흐림"]*8, [int(d*1.1) for d in base_demand]
+    else:
+        return get_weather_data() + (base_demand,)
+
+# 3️⃣ 사용자 입력
+def get_weather_data():
+    print("\n📊 사용자 입력 - 기상 데이터 (각 8개 값 입력)")
+    try:
+        temp = list(map(float, input("🌡️ 기온(°C):\n👉 ").split()))
+        solar = list(map(float, input("☀️ 일사량(W/m²):\n👉 ").split()))
+        wind = list(map(float, input("💨 풍속(m/s):\n👉 ").split()))
+        pm25 = list(map(float, input("🌫️ 미세먼지(PM2.5):\n👉 ").split()))
+        weather = input("🌦️ 날씨 상태 (예: 맑음 흐림 비 ...):\n👉 ").split()
+        if any(len(lst) != 8 for lst in [temp, solar, wind, pm25]) or len(weather) != 8:
+            raise ValueError
+    except ValueError:
+        print("⚠ 입력 오류! 기본값 사용")
+        temp = [15] * 8
+        solar = [0 if h < 6 or h > 18 else 500 for h in hours]
+        wind = [5] * 8
+        pm25 = [30] * 8
+        weather = ["맑음"] * 8
+    return temp, solar, wind, pm25, weather
+
+# 4️⃣ 발전량 계산 관련 함수
+def calculate_pm25_impact(pm25): return max(0.5, 1 - 0.005 * (pm25 / 10))
+weather_impact = {"맑음": 1.0, "흐림": 0.75, "비": 0.5}
+
+def calculate_renewable_energy(temp, solar_rad, wind_speed, pm25, weather):
+    solar, wind = [], []
+    for i in range(8):
+        base = max(0, (solar_rad[i] / 1000) * 50 * (1 - 0.005 * (temp[i] - 25)))
+        eff = calculate_pm25_impact(pm25[i]) * weather_impact.get(weather[i], 1.0)
+        solar.append(base * eff)
+        wind.append(0 if wind_speed[i] < 3 or wind_speed[i] > 25 else 30 * (wind_speed[i] / 10) ** 3)
+    return solar, wind
+
+# 5️⃣ 에너지 믹스 최적화
+def optimize_energy_mix(solar, wind, demand):
+    global storage
+    optimized_solar, optimized_wind, storage_usage = [], [], []
+    total_cost = 0
+    for i in range(8):
+        required = demand[i] - nuclear_output
+        available = solar[i] + wind[i]
+        if available < required:
+            used = min(storage, required - available)
+            storage -= used
+            storage_usage.append(used)
+        else:
+            surplus = available - required
+            if storage + surplus <= storage_capacity:
+                storage += surplus
+            else:
+                surplus -= (storage_capacity - storage)
+                storage = storage_capacity
+            ratio_s = solar[i] / available if available else 0
+            ratio_w = wind[i] / available if available else 0
+            solar[i] -= surplus * ratio_s
+            wind[i] -= surplus * ratio_w
+            storage_usage.append(0)
+        optimized_solar.append(solar[i])
+        optimized_wind.append(wind[i])
+        total_cost += (solar[i] * LCOE_solar) + (wind[i] * LCOE_wind) + (nuclear_output * LCOE_nuclear) + (storage_usage[i] * LCOE_storage)
+    return optimized_solar, optimized_wind, total_cost
+
+# 6️⃣ 실행
+print("\n🌍 시나리오를 선택하세요:")
+scenarios = ["맑은 날", "폭풍우", "에너지 공급 취약", "흐린 날", "눈 내리는 날"]
+for idx, name in enumerate(scenarios, 1):
+    print(f"{idx}. {name}")
+print("입력: 사용자 정의")
+choice = input("\n👉 선택 (1~5/입력): ")
+
+if choice in [str(i) for i in range(1, 6)]:
+    temp, solar_rad, wind_spd, pm25, weather, demand = get_scenario_data(scenarios[int(choice)-1])
+else:
+    temp, solar_rad, wind_spd, pm25, weather = get_weather_data()
+    demand = base_demand
+
+solar_gen, wind_gen = calculate_renewable_energy(temp, solar_rad, wind_spd, pm25, weather)
+solar_opt, wind_opt, cost_opt = optimize_energy_mix(solar_gen, wind_gen, demand)
+
+# 🔟 결과 출력
+print("\n⚡ 최적 에너지 조합 (3시간 간격) ⚡")
+for i in range(8):
+    total = solar_opt[i] + wind_opt[i] + nuclear_output
+    print(f"{hours[i]:02d}시 - 태양광: {solar_opt[i]:.1f}MW, 풍력: {wind_opt[i]:.1f}MW, 원자력: {nuclear_output:.1f}MW, 총: {total:.1f}MW")
+print(f"\n💰 총 발전 비용: {cost_opt:,.0f} 원")
